@@ -149,6 +149,17 @@ MODEL_REGISTRY: Dict[str, Dict] = {
         "timeout": 180.0,
         "max_retries": 2,
     },
+    "gpt-image-2": {
+        "display_name": "GPT Image 2",
+        "roles": ["image"],
+        "provider": "gemai",
+        "api_key_env": "GEMAI_API_KEY",
+        "base_url": "https://api.gemai.cc/v1",
+        "temperature_script": 0.3,
+        "temperature_code": 0.1,
+        "timeout": 180.0,
+        "max_retries": 2,
+    },
 }
 
 
@@ -182,6 +193,10 @@ def list_script_display_names() -> List[str]:
 
 def list_code_display_names() -> List[str]:
     return [get_model_display_name(name) for name in list_code_models()]
+
+
+def list_image_display_names() -> List[str]:
+    return [get_model_display_name(name) for name in list_image_models()]
 
 
 def build_llm_config(model_name: str, role: str) -> LLMConfig:

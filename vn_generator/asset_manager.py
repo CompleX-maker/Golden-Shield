@@ -30,28 +30,54 @@ class AssetManager:
             f"{bg.description}, "
             f"visual novel background, {tone}, wide cinematic scene, high detail, "
             f"story atmosphere, environmental storytelling, anime-realistic style, "
-            f"clean composition, no subtitles, no watermark, no UI, no text"
+            f"clean composition, no subtitles, no watermark, no UI, no text, no people"
         )
 
     def _build_character_base_prompt(self, char: Character, script: Script) -> str:
+        """
+        调整为更适合 VN 的半身立绘：
+        - 不要只剩腿
+        - 不要大头近景
+        - 不要全身构图过低
+        - 要求单人单头单脸
+        """
         tone = self._safe_tone(script)
         expr = char.default_expression or "neutral"
 
         return (
-            f"{char.name}, {char.description}, "
-            f"same fixed identity, same hairstyle, same clothes, same face, "
-            f"visual novel character sprite, upper body portrait, centered composition, "
-            f"{expr} expression, {tone}, anime style, clean background, single character"
+            f"masterpiece, best quality, visual novel character sprite, "
+            f"single character, one person only, solo, one head only, single face, "
+            f"waist-up portrait, half body, upper body visible, clear face, "
+            f"front view, natural standing pose, "
+            f"leave enough margin around the character, not close-up, not face close-up, "
+            f"not full body, not cropped head, not cropped face, "
+            f"plain clean background, simple background, transparent background style, "
+            f"no text, no watermark, no subtitles, no scene background, "
+            f"character name: {char.name}, "
+            f"character design: {char.description}, "
+            f"fixed identity, fixed face, fixed age, fixed gender presentation, "
+            f"fixed hairstyle, fixed hair color, fixed outfit, fixed accessories, "
+            f"{expr} expression, "
+            f"{tone}, anime style, game sprite"
         )
 
     def _build_character_expression_prompt(self, char: Character, expression: str, script: Script) -> str:
         tone = self._safe_tone(script)
         return (
-            f"{char.name}, {char.description}, "
-            f"same person as reference image, preserve face, preserve hairstyle, preserve clothes, "
+            f"same character as reference image, same person, same identity, "
+            f"same face, same age, same gender presentation, same hairstyle, same hair color, "
+            f"same outfit, same accessories, "
             f"only change facial expression to {expression}, "
-            f"visual novel character sprite, upper body portrait, centered composition, "
-            f"{tone}, anime style, clean background, single character"
+            f"single character, one person only, solo, one head only, single face, "
+            f"waist-up portrait, half body, upper body visible, clear face, "
+            f"front view, natural standing pose, "
+            f"leave enough margin around the character, not close-up, not face close-up, "
+            f"not full body, not cropped head, not cropped face, "
+            f"visual novel character sprite, "
+            f"plain clean background, simple background, transparent background style, "
+            f"no extra people, no text, no watermark, no subtitles, no scene background, "
+            f"character design: {char.description}, "
+            f"{tone}, anime style, game sprite"
         )
 
     # =========================
@@ -175,7 +201,7 @@ class AssetManager:
                 if not base_path.exists() or overwrite_existing:
                     base_prompt = self._build_character_base_prompt(char, script)
                     print(f"    [基准图][开始] {base_path}")
-                    print(f"    [基准图][Prompt] {base_prompt[:180]}{'...' if len(base_prompt) > 180 else ''}")
+                    print(f"    [基准图][Prompt] {base_prompt[:240]}{'...' if len(base_prompt) > 240 else ''}")
 
                     self.image_provider.generate_character_base(
                         prompt=base_prompt,
@@ -210,7 +236,7 @@ class AssetManager:
                     expr_prompt = self._build_character_expression_prompt(char, expr, script)
                     print(f"    [表情图][开始] {char.id}/{expr}")
                     print(f"    [表情图][路径] {expr_path}")
-                    print(f"    [表情图][Prompt] {expr_prompt[:180]}{'...' if len(expr_prompt) > 180 else ''}")
+                    print(f"    [表情图][Prompt] {expr_prompt[:240]}{'...' if len(expr_prompt) > 240 else ''}")
 
                     self.image_provider.generate_character_expression(
                         reference_image_path=str(base_path),

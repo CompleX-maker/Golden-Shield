@@ -28,6 +28,105 @@ class RenpyBuilder:
         self._var_map = {}
         self._character_var_map = {}
 
+    def _write_vn_transforms(self, game_dir: Path):
+        content = '''## 自动生成的 VN 立绘站位与焦点变换
+
+transform vn_center:
+    xalign 0.5
+    yalign 1.0
+    zoom 0.78
+
+transform vn_left:
+    xalign 0.24
+    yalign 1.0
+    zoom 0.74
+
+transform vn_right:
+    xalign 0.76
+    yalign 1.0
+    zoom 0.74
+
+transform vn_left_focus:
+    xalign 0.24
+    yalign 1.0
+    zoom 0.80
+    alpha 1.0
+
+transform vn_right_focus:
+    xalign 0.76
+    yalign 1.0
+    zoom 0.80
+    alpha 1.0
+
+transform vn_left_dim:
+    xalign 0.24
+    yalign 1.0
+    zoom 0.72
+    alpha 0.72
+
+transform vn_right_dim:
+    xalign 0.76
+    yalign 1.0
+    zoom 0.72
+    alpha 0.72
+
+transform vn_center_focus:
+    xalign 0.5
+    yalign 1.0
+    zoom 0.82
+    alpha 1.0
+'''
+        (game_dir / "transforms.rpy").write_text(content, encoding="utf-8")
+
+    def _write_image_definitions(self, game_dir: Path, script: Script):
+        """
+        生成 Ren'Py 图片别名定义，解决：
+        - scene bg xxx 无法找到背景图
+        - show char expr 无法找到角色立绘
+        """
+        lines = ['## 图片资源定义', '']
+
+        # ===== 背景图 =====
+        bg_ids = set()
+        for bg in script.backgrounds:
+            bg_id = str(bg.id).strip()
+            if not bg_id:
+                continue
+            bg_ids.add(bg_id)
+            lines.append(f'image bg {bg_id} = "images/bg/{bg_id}.png"')
+
+        # 保险补一个黑屏背景
+        if "black" not in bg_ids:
+            lines.append('image bg black = "images/bg/black.png"')
+
+        lines.append('')
+
+        # ===== 角色立绘 =====
+        for char in script.characters:
+            original_char_id = str(char.id).strip()
+            if not original_char_id:
+                continue
+
+            final_var = self._character_var_map.get(original_char_id, original_char_id)
+
+            expressions = char.expressions if char.expressions else ["neutral"]
+            default_expr = char.default_expression or "neutral"
+            if default_expr not in expressions:
+                expressions = [default_expr] + [x for x in expressions if x != default_expr]
+
+            seen_expr = set()
+            for expr in expressions:
+                expr = str(expr).strip() or "neutral"
+                if expr in seen_expr:
+                    continue
+                seen_expr.add(expr)
+
+                lines.append(
+                    f'image {final_var} {expr} = "images/characters/{original_char_id}/{expr}.png"'
+                )
+
+        (game_dir / "images.rpy").write_text("\n".join(lines), encoding="utf-8")
+
     def create_project(self, files: List["RenpyFile"], script: Script, font_name: str = "auto") -> str:
         if self.output_path.exists():
             shutil.rmtree(self.output_path)
@@ -50,6 +149,8 @@ class RenpyBuilder:
             "options.rpy",
             "script.rpy",
             "game_end_summary.rpy",
+            "images.rpy",
+            "transforms.rpy",
         }
 
         for file in files:
@@ -70,6 +171,8 @@ class RenpyBuilder:
         self._write_screens_config(game_dir, font_path, font_display)
         self._write_options(game_dir, script)
         self._write_characters(game_dir, script)
+        self._write_image_definitions(game_dir, script)
+        self._write_vn_transforms(game_dir)
         self._rewrite_scene_files_to_match_defined_characters(game_dir, script)
         self._ensure_all_characters_defined(game_dir, script)
 
@@ -100,10 +203,131 @@ class RenpyBuilder:
         return text
 
     def _sanitize_rpy_content(self, content: str) -> str:
-        content = content.replace("\r\n", "\n")
+        """
+        对 LLM 生成的 rpy 文本做最终兜底清洗，重点修复：
+        1. 中文弯引号
+        2. menu 选项里的未转义双引号
+        3. 角色对白 / 旁白中的未转义双引号
+        4. Windows 换行
+        """
+
+        def _escape_inner_quotes(text: str) -> str:
+            """
+            将字符串内部未转义的双引号转成 \"
+            先保留已有的 \\"，避免重复转义。
+            """
+            placeholder = "__RENPY_ESCAPED_QUOTE__"
+            text = text.replace('\\"', placeholder)
+            text = text.replace('"', '\\"')
+            text = text.replace(placeholder, '\\"')
+            return text
+
+        def _fix_menu_line(line: str) -> str:
+            """
+            修复 menu 选项行：
+            "顺着对方的话问："是小军吧？"":
+            ->
+            "顺着对方的话问：\\"是小军吧？\\"":
+            """
+            stripped = line.strip()
+            if not (stripped.startswith('"') and stripped.endswith('":')):
+                return line
+
+            indent = line[:len(line) - len(line.lstrip())]
+            inner = stripped[1:-2]
+            inner = _escape_inner_quotes(inner)
+            return f'{indent}"{inner}":'
+
+        def _fix_say_line(line: str) -> str:
+            """
+            修复旁白 / 对话行：
+            narrator "她问："你是谁？""
+            ->
+            narrator "她问：\\"你是谁？\\""
+            """
+            stripped = line.strip()
+            if not stripped:
+                return line
+
+            # 跳过明显不是对白的语句
+            reserved_prefixes = (
+                "label ", "menu:", "scene ", "show ", "hide ", "jump ", "call ",
+                "return", "with ", "play ", "stop ", "queue ", "window ",
+                "pause", "python:", "init ", "define ", "default ", "$"
+            )
+            for prefix in reserved_prefixes:
+                if stripped.startswith(prefix):
+                    return line
+
+            # 匹配：角色对白 / 旁白
+            # 示例：
+            # narrator "xxx"
+            # e "xxx"
+            # "xxx"
+            m_dialogue = re.match(r'^(\s*[a-zA-Z_][a-zA-Z0-9_]*\s+)(".*")(\s*)$', line)
+            m_narration = re.match(r'^(\s*)(".*")(\s*)$', line)
+
+            if m_dialogue:
+                prefix, quoted, suffix = m_dialogue.groups()
+                inner = quoted[1:-1]
+                inner = _escape_inner_quotes(inner)
+                return f'{prefix}"{inner}"{suffix}'
+
+            if m_narration:
+                prefix, quoted, suffix = m_narration.groups()
+                inner = quoted[1:-1]
+                inner = _escape_inner_quotes(inner)
+                return f'{prefix}"{inner}"{suffix}'
+
+            return line
+
+        # 1) 基础字符清洗
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
         content = content.replace("\u201c", '"').replace("\u201d", '"')
         content = content.replace("\u2018", "'").replace("\u2019", "'")
-        return content
+        content = content.replace("\u00a0", " ")
+
+        fixed_lines = []
+        in_menu_block = False
+
+        for line in content.splitlines():
+            stripped = line.strip()
+
+            # 进入 menu 块
+            if stripped == "menu:":
+                in_menu_block = True
+                fixed_lines.append(line)
+                continue
+
+            # menu 块结束判断：遇到非空且缩进回到 menu 同级/更外层的复杂情况很难完美判定，
+            # 这里采用实用策略：只要当前行不是典型 menu 选项/其子块，就由正常对白修复逻辑处理。
+            if in_menu_block:
+                if stripped.startswith('"') and stripped.endswith('":'):
+                    fixed_lines.append(_fix_menu_line(line))
+                    continue
+
+                # menu 下的动作行、空行、子块行，直接保留
+                if (
+                        stripped == ""
+                        or stripped.startswith("jump ")
+                        or stripped.startswith("call ")
+                        or stripped.startswith("return")
+                        or stripped.startswith("if ")
+                        or stripped.startswith("elif ")
+                        or stripped.startswith("else:")
+                        or stripped.startswith("$")
+                ):
+                    fixed_lines.append(line)
+                    continue
+
+                # 如果是别的普通文本，也继续走普通修复
+                # 但 menu 状态不强行维持
+                in_menu_block = False
+
+            # 普通对白 / 旁白修复
+            fixed_lines.append(_fix_say_line(line))
+
+        return "\n".join(fixed_lines)
 
     def _sanitize_color(self, color: str | None) -> str | None:
         if not color:
