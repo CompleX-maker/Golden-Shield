@@ -40,25 +40,25 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 def get_default_image_provider() -> str:
     provider = os.getenv("IMAGE_PROVIDER", "none").strip().lower()
-    return provider if provider in {"none", "local_sd", "gemini"} else "none"
+    if provider == "gemini":
+        provider = "remote_api"
+    return provider if provider in {"none", "local_sd", "remote_api"} else "none"
 
 
 def get_default_local_sd_url() -> str:
     return os.getenv("LOCAL_SD_BASE_URL", "http://127.0.0.1:7861").strip() or "http://127.0.0.1:7861"
 
 
-def get_default_image_model(provider: str) -> str:
+def get_default_image_model(provider: str):
     env_model = os.getenv("IMAGE_MODEL", "").strip()
-    if env_model:
-        return env_model
 
-    if provider == "gemini":
-        return get_image_model_name()
+    if provider == "remote_api":
+        return env_model or get_image_model_name()
 
     if provider == "local_sd":
         return r"sd1.5\anything-v5.safetensors [7f96a1a9ca]"
 
-    return ""
+    return None
 
 
 def get_local_sd_model_choices():
@@ -97,27 +97,47 @@ def normalize_font(font_choice: str) -> str:
     return Path(font_choice).stem
 
 
-def normalize_image_provider(provider: str) -> str:
-    provider = (provider or "none").strip().lower()
-    if provider not in {"none", "local_sd", "gemini"}:
-        return "none"
-    return provider
+IMAGE_MODEL_NAMES = list_image_models()
+IMAGE_MODEL_DISPLAY_TO_NAME = {get_model_display_name(name): name for name in IMAGE_MODEL_NAMES}
+IMAGE_MODEL_NAME_TO_DISPLAY = {name: get_model_display_name(name) for name in IMAGE_MODEL_NAMES}
+
+PROVIDER_CHOICES = ["none", "local_sd"] + [get_model_display_name(name) for name in IMAGE_MODEL_NAMES]
 
 
-def normalize_image_model(provider: str, image_model_choice: str, image_model_custom: str) -> str:
-    custom = (image_model_custom or "").strip()
-    choice = (image_model_choice or "").strip()
+def normalize_image_provider_selection(selection: str) -> tuple[str, str]:
+    selection = (selection or "none").strip()
 
-    if custom:
-        return custom
+    if selection == "none":
+        return "none", ""
 
-    if provider == "gemini":
-        return choice or get_image_model_name()
+    if selection == "local_sd":
+        return "local_sd", get_default_image_model("local_sd") or r"sd1.5\anything-v5.safetensors [7f96a1a9ca]"
+
+    if selection in IMAGE_MODEL_DISPLAY_TO_NAME:
+        return "remote_api", IMAGE_MODEL_DISPLAY_TO_NAME[selection]
+
+    lower_selection = selection.lower()
+    if lower_selection == "gemini" or lower_selection == "remote_api":
+        model_name = get_default_image_model("remote_api") or get_image_model_name()
+        return "remote_api", model_name
+
+    if selection in IMAGE_MODEL_NAME_TO_DISPLAY:
+        return "remote_api", selection
+
+    return "none", ""
+
+
+def get_default_provider_selection() -> str:
+    provider = get_default_image_provider()
 
     if provider == "local_sd":
-        return choice or r"sd1.5\anything-v5.safetensors [7f96a1a9ca]"
+        return "local_sd"
 
-    return ""
+    if provider == "remote_api":
+        model_name = get_default_image_model("remote_api") or get_image_model_name()
+        return IMAGE_MODEL_NAME_TO_DISPLAY.get(model_name, get_model_display_name(model_name))
+
+    return "none"
 
 
 def build_generator() -> VNGenerator:
@@ -147,16 +167,14 @@ def image_status_text(enabled: bool, provider: str, model_name: str, local_sd_ur
         return "图片生成：关闭"
     if provider == "local_sd":
         return f"图片生成：本地 SD / 模型 `{model_name or '未指定'}` / 地址 `{local_sd_url}`"
-    return f"图片生成：Gemini / 模型 `{model_name or get_image_model_name()}`"
+    return f"图片生成：{get_model_display_name(model_name) if model_name else '远程模型'} / 模型 `{model_name or get_image_model_name()}`"
 
 
 def _run_generate(
     story_text: str,
     font_choice: str,
     image_enabled: bool,
-    image_provider: str,
-    image_model_choice: str,
-    image_model_custom: str,
+    image_provider_selection: str,
     local_sd_base_url: str,
 ):
     if not story_text or not story_text.strip():
@@ -170,9 +188,8 @@ def _run_generate(
 
     start_time = time.time()
 
-    provider = normalize_image_provider(image_provider)
+    provider, model_name = normalize_image_provider_selection(image_provider_selection)
     enabled = bool(image_enabled) and provider != "none"
-    model_name = normalize_image_model(provider, image_model_choice, image_model_custom)
     local_sd_base_url = (local_sd_base_url or get_default_local_sd_url()).strip()
 
     try:
@@ -291,18 +308,14 @@ def generate_from_text(
     story_text,
     font_choice,
     image_enabled,
-    image_provider,
-    image_model_choice,
-    image_model_custom,
+    image_provider_selection,
     local_sd_base_url,
 ):
     yield from _run_generate(
         story_text=story_text,
         font_choice=font_choice,
         image_enabled=image_enabled,
-        image_provider=image_provider,
-        image_model_choice=image_model_choice,
-        image_model_custom=image_model_custom,
+        image_provider_selection=image_provider_selection,
         local_sd_base_url=local_sd_base_url,
     )
 
@@ -311,9 +324,7 @@ def generate_from_file(
     file_obj,
     font_choice,
     image_enabled,
-    image_provider,
-    image_model_choice,
-    image_model_custom,
+    image_provider_selection,
     local_sd_base_url,
 ):
     if file_obj is None:
@@ -389,9 +400,7 @@ def generate_from_file(
             content,
             font_choice,
             image_enabled,
-            image_provider,
-            image_model_choice,
-            image_model_custom,
+            image_provider_selection,
             local_sd_base_url,
         )
 
@@ -405,37 +414,25 @@ def generate_from_file(
         )
 
 
-def on_provider_change(provider: str):
-    provider = normalize_image_provider(provider)
+def on_provider_change(selection: str):
+    provider, _ = normalize_image_provider_selection(selection)
 
     if provider == "local_sd":
-        return (
-            gr.update(choices=get_local_sd_model_choices(), value=get_default_image_model("local_sd"), visible=True),
-            gr.update(value="", visible=True),
-            gr.update(value=get_default_local_sd_url(), visible=True),
+        return gr.update(
+            value=get_default_local_sd_url(),
+            visible=True,
         )
 
-    if provider == "gemini":
-        gemini_choices = list_image_models() or [get_image_model_name()]
-        default_model = os.getenv("IMAGE_MODEL", "").strip() or get_image_model_name()
-        if default_model not in gemini_choices:
-            gemini_choices = [default_model] + [x for x in gemini_choices if x != default_model]
-        return (
-            gr.update(choices=gemini_choices, value=default_model, visible=True),
-            gr.update(value="", visible=True),
-            gr.update(value=get_default_local_sd_url(), visible=False),
-        )
-
-    return (
-        gr.update(choices=[], value="", visible=False),
-        gr.update(value="", visible=False),
-        gr.update(value=get_default_local_sd_url(), visible=False),
+    return gr.update(
+        value=get_default_local_sd_url(),
+        visible=False,
     )
 
 
 font_choices = safe_get_font_choices()
 default_image_provider = get_default_image_provider()
 default_image_enabled = env_bool("IMAGE_ENABLED", False) and default_image_provider != "none"
+default_provider_selection = get_default_provider_selection()
 
 CSS = """
 :root {
@@ -743,35 +740,19 @@ with gr.Blocks(title="VN Generator", css=CSS, theme=gr.themes.Base()) as demo:
                                     scale=1
                                 )
 
-                            gr.HTML('<div class="image-box"><div class="image-subtitle">图片生成设置</div><div class="image-helper">不改变原有页面结构，仅在当前输入卡片下方增加图片配置。启用后可生成背景图与角色立绘；同一角色不同表情会尽量保持同一形象。</div></div>')
+                            gr.HTML('<div class="image-box"><div class="image-subtitle">图片生成设置</div><div class="image-helper">勾选后启用图片生成。远程图片模型已直接合并到“图片提供方”里；本地模式使用默认本地 SD 模型。</div></div>')
 
                             with gr.Row():
                                 text_image_enabled = gr.Checkbox(
-                                    label="启用图片生成",
+                                    label="",
                                     value=default_image_enabled,
                                     scale=1
                                 )
                                 text_image_provider = gr.Dropdown(
                                     label="图片提供方",
-                                    choices=["none", "local_sd", "gemini"],
-                                    value=default_image_provider,
-                                    scale=1
-                                )
-
-                            with gr.Row():
-                                text_image_model = gr.Dropdown(
-                                    label="图片模型",
-                                    choices=[],
-                                    value="",
-                                    allow_custom_value=False,
-                                    visible=(default_image_provider != "none"),
-                                    scale=1
-                                )
-                                text_image_model_custom = gr.Textbox(
-                                    label="自定义模型名（可选）",
-                                    placeholder="不填则使用上方下拉所选模型",
-                                    visible=(default_image_provider != "none"),
-                                    scale=1
+                                    choices=PROVIDER_CHOICES,
+                                    value=default_provider_selection,
+                                    scale=4
                                 )
 
                             text_local_sd_url = gr.Textbox(
@@ -804,35 +785,19 @@ with gr.Blocks(title="VN Generator", css=CSS, theme=gr.themes.Base()) as demo:
                                     scale=1
                                 )
 
-                            gr.HTML('<div class="image-box"><div class="image-subtitle">图片生成设置</div><div class="image-helper">文件模式与文本模式的图片配置分开保存，避免互相影响。页面布局保持原结构，仅在卡片底部扩展配置。</div></div>')
+                            gr.HTML('<div class="image-box"><div class="image-subtitle">图片生成设置</div><div class="image-helper">文件模式与文本模式的图片配置分开保存。远程图片模型已直接合并到“图片提供方”里；本地模式使用默认本地 SD 模型。</div></div>')
 
                             with gr.Row():
                                 file_image_enabled = gr.Checkbox(
-                                    label="启用图片生成",
+                                    label="",
                                     value=default_image_enabled,
                                     scale=1
                                 )
                                 file_image_provider = gr.Dropdown(
                                     label="图片提供方",
-                                    choices=["none", "local_sd", "gemini"],
-                                    value=default_image_provider,
-                                    scale=1
-                                )
-
-                            with gr.Row():
-                                file_image_model = gr.Dropdown(
-                                    label="图片模型",
-                                    choices=[],
-                                    value="",
-                                    allow_custom_value=False,
-                                    visible=(default_image_provider != "none"),
-                                    scale=1
-                                )
-                                file_image_model_custom = gr.Textbox(
-                                    label="自定义模型名（可选）",
-                                    placeholder="不填则使用上方下拉所选模型",
-                                    visible=(default_image_provider != "none"),
-                                    scale=1
+                                    choices=PROVIDER_CHOICES,
+                                    value=default_provider_selection,
+                                    scale=4
                                 )
 
                             file_local_sd_url = gr.Textbox(
@@ -867,22 +832,16 @@ with gr.Blocks(title="VN Generator", css=CSS, theme=gr.themes.Base()) as demo:
                             elem_classes=["path-box"]
                         )
 
-    text_provider_init = on_provider_change(default_image_provider)
-    file_provider_init = on_provider_change(default_image_provider)
-
-    text_image_model.value = text_provider_init[0]["value"] if isinstance(text_provider_init[0], dict) and "value" in text_provider_init[0] else ""
-    file_image_model.value = file_provider_init[0]["value"] if isinstance(file_provider_init[0], dict) and "value" in file_provider_init[0] else ""
-
     text_image_provider.change(
         fn=on_provider_change,
         inputs=[text_image_provider],
-        outputs=[text_image_model, text_image_model_custom, text_local_sd_url]
+        outputs=[text_local_sd_url]
     )
 
     file_image_provider.change(
         fn=on_provider_change,
         inputs=[file_image_provider],
-        outputs=[file_image_model, file_image_model_custom, file_local_sd_url]
+        outputs=[file_local_sd_url]
     )
 
     text_gen_btn.click(
@@ -892,8 +851,6 @@ with gr.Blocks(title="VN Generator", css=CSS, theme=gr.themes.Base()) as demo:
             font_dropdown,
             text_image_enabled,
             text_image_provider,
-            text_image_model,
-            text_image_model_custom,
             text_local_sd_url,
         ],
         outputs=[result_md, stage_html, download_file, path_text]
@@ -906,8 +863,6 @@ with gr.Blocks(title="VN Generator", css=CSS, theme=gr.themes.Base()) as demo:
             font_dropdown_file,
             file_image_enabled,
             file_image_provider,
-            file_image_model,
-            file_image_model_custom,
             file_local_sd_url,
         ],
         outputs=[result_md, stage_html, download_file, path_text]
@@ -915,19 +870,21 @@ with gr.Blocks(title="VN Generator", css=CSS, theme=gr.themes.Base()) as demo:
 
 
 if __name__ == "__main__":
-    print("WEBUI_VERSION = IMAGE_OPTIONS_ADDED", flush=True)
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+
+    print("WEBUI_VERSION = IMAGE_PROVIDER_MERGED_WITH_REMOTE_MODELS", flush=True)
     print("VN Generator 启动", flush=True)
     print(f"  剧本模型: {get_model_display_name(get_script_model_name())}", flush=True)
     print(f"  代码模型: {get_model_display_name(get_code_model_name())}", flush=True)
-    print(f"  默认图片提供方: {default_image_provider}", flush=True)
+    print(f"  默认图片提供方: {default_provider_selection}", flush=True)
     print(f"  默认图片模型: {get_default_image_model(default_image_provider)}", flush=True)
     print(f"  Local SD URL: {get_default_local_sd_url()}", flush=True)
     print(f"  字体数量: {len(font_choices) - 1}", flush=True)
-    print("  WebUI 地址: http://127.0.0.1:7860", flush=True)
+    print(f"  WebUI 地址: http://127.0.0.1:{server_port}", flush=True)
 
     demo.launch(
         server_name="127.0.0.1",
-        server_port=7860,
+        server_port=server_port,
         share=False,
         show_error=True
     )

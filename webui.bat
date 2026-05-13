@@ -27,6 +27,7 @@ if not defined LOCAL_SD_BASE_URL set "LOCAL_SD_BASE_URL=http://127.0.0.1:7861"
 :: ===== 固定默认本地 SD 模型 =====
 set "DEFAULT_LOCAL_SD_MODEL=sd1.5\anything-v5.safetensors [7f96a1a9ca]"
 set "DEFAULT_LOCAL_SD_URL=http://127.0.0.1:7861"
+set "DEFAULT_REMOTE_IMAGE_MODEL=[官]gemini-3.1-flash-image-preview"
 
 echo ========================================
 echo    VN Generator
@@ -197,6 +198,14 @@ echo [i] Upgrading pip...
 if errorlevel 1 (
     color 0C
     echo [X] pip upgrade failed.
+    exit /b 1
+)
+
+echo [i] Installing pinned front-end compatibility packages...
+"%PYTHON_EXE%" -m pip install gradio==4.44.1 gradio_client==1.3.0 huggingface_hub==0.25.2 pydantic==2.8.2 fastapi==0.112.2 starlette==0.38.2
+if errorlevel 1 (
+    color 0C
+    echo [X] Failed to install Gradio compatibility packages.
     exit /b 1
 )
 
@@ -403,7 +412,7 @@ echo Current: %IMAGE_PROVIDER%
 echo.
 echo 1. none
 echo 2. local_sd
-echo 3. gemini
+echo 3. remote_api
 echo 4. Back
 echo.
 
@@ -437,17 +446,50 @@ if "%sel%"=="2" (
 
 if "%sel%"=="3" (
     set "IMAGE_ENABLED=1"
-    set "IMAGE_PROVIDER=gemini"
-    set "IMAGE_MODEL=[官]gemini-3.1-flash-image-preview"
-    cls
-    echo [OK] Image provider set to: gemini
-    echo [OK] Gemini image model fixed to: %IMAGE_MODEL%
-    echo.
-    goto MENU
+    set "IMAGE_PROVIDER=remote_api"
+    goto REMOTE_IMAGE_MODEL_MENU
 )
 
 if "%sel%"=="4" goto MENU
 goto MENU
+
+
+:REMOTE_IMAGE_MODEL_MENU
+cls
+echo ========================================
+echo   Select Remote Image Model
+echo ========================================
+echo.
+echo Current Remote Model: %IMAGE_MODEL%
+echo.
+echo 1. [官]gemini-3.1-flash-image-preview
+echo 2. gpt-image-2
+echo 3. Back
+echo.
+
+choice /c 123 /n /m "Select (1-3): "
+set "sel=%errorlevel%"
+
+if "%sel%"=="1" (
+    set "IMAGE_MODEL=[官]gemini-3.1-flash-image-preview"
+    cls
+    echo [OK] Remote image provider set to: remote_api
+    echo [OK] Remote image model set to: %IMAGE_MODEL%
+    echo.
+    goto MENU
+)
+
+if "%sel%"=="2" (
+    set "IMAGE_MODEL=gpt-image-2"
+    cls
+    echo [OK] Remote image provider set to: remote_api
+    echo [OK] Remote image model set to: %IMAGE_MODEL%
+    echo.
+    goto MENU
+)
+
+if "%sel%"=="3" goto IMAGE_PROVIDER_MENU
+goto IMAGE_PROVIDER_MENU
 
 
 :SHOW_CONFIG
@@ -462,7 +504,7 @@ echo Image Provider   : %IMAGE_PROVIDER%
 echo Image Model      : %IMAGE_MODEL%
 echo Local SD Base URL: %LOCAL_SD_BASE_URL%
 echo Python Executable: %PYTHON_EXE%
-echo Venv Exists      : 
+echo Venv Exists      :
 if exist "%VENV_PYTHON%" (
     echo   YES
 ) else (
@@ -487,19 +529,21 @@ if not exist "%VENV_PYTHON%" (
 
 set "PYTHON_EXE=%VENV_PYTHON%"
 
-"%PYTHON_EXE%" -c "import os, requests, openai; from dotenv import load_dotenv; load_dotenv(); key_gemai=os.getenv('GEMAI_API_KEY'); key_qwen=os.getenv('DASHSCOPE_API_KEY'); script_model=os.getenv('SCRIPT_MODEL','[满血A]gemini-3-pro-preview-maxthinking'); code_model=os.getenv('CODE_MODEL','claude-sonnet-4-6'); image_enabled=os.getenv('IMAGE_ENABLED','0')=='1'; image_provider=os.getenv('IMAGE_PROVIDER','none'); local_sd=os.getenv('LOCAL_SD_BASE_URL','http://127.0.0.1:7861'); script_is_qwen=('qwen' in script_model.lower()); code_is_qwen=('qwen' in code_model.lower()); assert ((key_qwen if script_is_qwen else key_gemai)), 'SCRIPT API KEY missing'; assert ((key_qwen if code_is_qwen else key_gemai)), 'CODE API KEY missing'; script_client=openai.OpenAI(api_key=(key_qwen if script_is_qwen else key_gemai), base_url=('https://dashscope.aliyuncs.com/compatible-mode/v1' if script_is_qwen else 'https://api.gemai.cc/v1')); code_client=openai.OpenAI(api_key=(key_qwen if code_is_qwen else key_gemai), base_url=('https://dashscope.aliyuncs.com/compatible-mode/v1' if code_is_qwen else 'https://api.gemai.cc/v1')); script_client.chat.completions.create(model=script_model, messages=[{'role':'user','content':'Hi'}], max_tokens=3, timeout=5); code_client.chat.completions.create(model=code_model, messages=[{'role':'user','content':'Hi'}], max_tokens=3, timeout=5); assert (not (image_enabled and image_provider=='gemini')) or key_gemai, 'IMAGE GEMINI API KEY missing'; print('API CHECK OK')"
+"%PYTHON_EXE%" -c "import os, openai; from dotenv import load_dotenv; load_dotenv(); key_gemai=os.getenv('GEMAI_API_KEY'); key_qwen=os.getenv('DASHSCOPE_API_KEY'); script_model=os.getenv('SCRIPT_MODEL','[满血A]gemini-3-pro-preview-maxthinking'); code_model=os.getenv('CODE_MODEL','claude-sonnet-4-6'); image_enabled=os.getenv('IMAGE_ENABLED','0')=='1'; image_provider=os.getenv('IMAGE_PROVIDER','none'); script_is_qwen=('qwen' in script_model.lower()); code_is_qwen=('qwen' in code_model.lower()); assert ((key_qwen if script_is_qwen else key_gemai)), 'SCRIPT API KEY missing'; assert ((key_qwen if code_is_qwen else key_gemai)), 'CODE API KEY missing'; script_client=openai.OpenAI(api_key=(key_qwen if script_is_qwen else key_gemai), base_url=('https://dashscope.aliyuncs.com/compatible-mode/v1' if script_is_qwen else 'https://api.gemai.cc/v1')); code_client=openai.OpenAI(api_key=(key_qwen if code_is_qwen else key_gemai), base_url=('https://dashscope.aliyuncs.com/compatible-mode/v1' if code_is_qwen else 'https://api.gemai.cc/v1')); script_client.chat.completions.create(model=script_model, messages=[{'role':'user','content':'Hi'}], max_tokens=3, timeout=15); code_client.chat.completions.create(model=code_model, messages=[{'role':'user','content':'Hi'}], max_tokens=3, timeout=15); assert (not (image_enabled and image_provider=='remote_api')) or key_gemai, 'REMOTE IMAGE API KEY missing'; print('API CHECK OK')"
 if errorlevel 1 (
-    color 0C
+    color 0E
     echo.
-    echo [X] API check failed. Launch blocked.
-    echo [i] Please check API keys or selected models.
+    echo [!] API check failed.
     echo [i] Current Script Model: %SCRIPT_MODEL%
     echo [i] Current Code   Model: %CODE_MODEL%
+    echo [i] You may continue to start UI and test manually.
     echo.
-    pause
-    color 0A
-    cls
-    goto MENU
+    choice /c YN /n /m "Continue startup anyway? (Y/N): "
+    if errorlevel 2 (
+        color 0A
+        cls
+        goto MENU
+    )
 )
 goto :eof
 
